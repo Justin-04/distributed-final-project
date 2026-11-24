@@ -1,0 +1,58 @@
+# prometheus-nginxlog-exporter: turns the gateway's access log into Prometheus metrics.
+# Reads /var/log/gateway/metrics.log (log_format gateway_metrics in gateway.common.conf).
+#
+# Produces (namespace "gateway"):
+#   gateway_http_response_count_total{method,status,replica,retried}
+#   gateway_http_response_size_bytes{...}
+#   gateway_http_response_time_seconds{...}        (summary)
+#   gateway_http_response_time_seconds_hist{...}   (histogram, buckets below)
+
+listen:
+  port: 4040
+  address: "0.0.0.0"
+  metrics_endpoint: "/metrics"
+
+namespaces:
+  - name: gateway
+    format: "$remote_addr|$time_local|$request|$status|$body_bytes_sent|$upstream_addr|$request_time|$upstream_http_x_instance"
+    source:
+      files:
+        - /var/log/gateway/metrics.log
+    labels:
+      service: "api-gateway"
+    relabel_configs:
+      # which Agent A replica answered: its name from the X-Instance header (agent-a-1,
+      # agent-a-2, ...); "-" = answered by the gateway itself (rate limit 429,
+      # /gateway/health) or no replica answered at all (502)
+      - target_label: replica
+        from: upstream_http_x_instance
+        matches:
+          - regexp: "^-?$"
+            replacement: "gateway"
+          - regexp: "^(.+)$"
+            replacement: "$1"
+      # endpoint group, so chat latency (seconds) is not mixed with health checks (ms)
+      - target_label: endpoint
+        from: request
+        split: 2
+        separator: " "
+        matches:
+          - regexp: "^/api/v1/chat.*"
+            replacement: "chat"
+          - regexp: "^/api/v1/admin/.*"
+            replacement: "admin"
+          - regexp: "^/api/v1/auth/.*"
+            replacement: "auth"
+          - regexp: "^/(health|gateway/health)$"
+            replacement: "health"
+          - regexp: "^.*$"
+            replacement: "other"
+      # was the request retried on another replica (failover)?
+      - target_label: retried
+        from: upstream_addr
+        matches:
+          - regexp: "^.*,.*$"
+            replacement: "yes"
+          - regexp: "^.*$"
+            replacement: "no"
+    histogram_buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120]

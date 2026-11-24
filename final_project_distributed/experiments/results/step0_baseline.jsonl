@@ -1,0 +1,4 @@
+{"time": "2026-11-20T20:54:00", "test": "single_chat", "status": 200, "seconds": 24.6, "route": "rag_agent"}
+{"time": "2026-11-20T20:55:09", "test": "parallel_chats", "n": 3, "wall_seconds": 68.5, "latencies": [67.9, 68.5, 44.3], "single_seconds": 24.6}
+{"time": "2026-11-20T20:57:37", "test": "blocking_ingest", "pdf": "DJI_Neo_User_Manual_v1.0_en.pdf", "status": 200, "seconds": 139.3, "pages": 81, "chunks": 643, "chat_during_ingest_seconds": 119.7, "chat_during_ingest_status": 200}
+{"time": "2026-11-20T20:58:01", "test": "agent_a_outage", "requests": 5, "failed": 5, "statuses": [500, 500, 500, 500, 500]}

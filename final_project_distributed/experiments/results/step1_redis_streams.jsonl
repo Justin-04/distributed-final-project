@@ -1,0 +1,9 @@
+{"time": "2026-11-20T21:11:18", "test": "upload", "pdf": "DJI_Neo_User_Manual_v1.0_en.pdf", "accept_seconds": 28.3, "status": "completed", "elapsed_seconds": 40.6, "pages": 81, "chunks": 644, "workers": {"Justin-12152": 33, "Justin-33656": 28, "Justin-9092": 20}, "failed_pages": 0}
+{"time": "2026-11-20T21:12:23", "test": "upload", "pdf": "DJI_Neo_User_Manual_v1.0_en.pdf", "accept_seconds": 3.3, "status": "completed", "elapsed_seconds": 25.55, "pages": 81, "chunks": 646, "workers": {"Justin-6304": 20, "Justin-19856": 33, "Justin-10396": 28}, "failed_pages": 0}
+{"time": "2026-11-20T21:13:20", "test": "redis_restart", "statuses": [500, 200, 200, 200, 200]}
+{"time": "2026-11-20T21:16:33", "test": "redis_restart", "statuses": [200, 200, 200, 200, 200]}
+{"time": "2026-11-20T21:17:07", "test": "upload", "pdf": "DJI_Neo_User_Manual_v1.0_en.pdf", "accept_seconds": 2.7, "status": "completed", "elapsed_seconds": 30.07, "pages": 81, "chunks": 645, "workers": {"Justin-2420": 34, "Justin-29484": 21, "Justin-3344": 26}, "failed_pages": 0}
+{"time": "2026-11-20T21:17:21", "test": "duplicate_upload", "statuses": [202, 409]}
+{"time": "2026-11-20T21:18:54", "test": "redelivery", "chunks_before": 646, "chunks_after": 646, "pages_finished": "81", "total_pages": "81"}
+{"time": "2026-11-20T21:21:46", "test": "worker_crash", "status": "completed", "pages": 81, "failed": 0, "elapsed_seconds": 158.26, "workers": {"Justin-3344": 32, "Justin-2420": 22, "Justin-29484": 27}}
+{"time": "2026-11-20T21:50:29", "test": "upload", "pdf": "DJI_Neo_User_Manual_v1.0_en.pdf", "accept_seconds": 27.0, "status": "completed", "elapsed_seconds": 36.63, "pages": 81, "chunks": 646, "workers": {"Justin-18868": 24, "Justin-12556": 32, "Justin-25540": 25}, "failed_pages": 0}

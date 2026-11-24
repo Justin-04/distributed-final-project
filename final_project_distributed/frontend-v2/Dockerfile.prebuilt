@@ -1,0 +1,12 @@
+# Local variant: package an already-built `dist/` into nginx (no npm inside Docker).
+# Used by docker-compose.local.yml when the network blocks the npm registry
+# (e.g. a firewall doing TLS inspection). Build dist first on the host:
+#     cd frontend-v2 && ./node_modules/.bin/vite build
+FROM nginx:alpine
+
+COPY dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 3000
+
+CMD ["nginx", "-g", "daemon off;"]

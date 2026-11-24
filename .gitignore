@@ -1,0 +1,27 @@
+# Secrets — never commit (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Node / frontend builds
+node_modules/
+dist/
+
+# Large model weights (257 MB, over GitHub's 100 MB file limit)
+final_project_distributed/models/
+
+# Logs
+*.log
+
+# Office lock files (created while a .docx is open in Word)
+~$*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

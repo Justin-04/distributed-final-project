@@ -1,0 +1,18 @@
+{
+  "failover": {
+    "killed": "final_project_distributed-agent-system-a-2",
+    "kill_at_s": 9.3,
+    "requests": 353,
+    "failed": 1,
+    "retried_by_gateway": 1,
+    "before_kill": {
+      "172.23.0.4": 50,
+      "172.23.0.5": 40,
+      "172.23.0.6": 48
+    },
+    "after_kill": {
+      "172.23.0.4": 106,
+      "172.23.0.6": 108
+    }
+  }
+}

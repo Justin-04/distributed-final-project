@@ -1,0 +1,10 @@
+{
+  "ratelimit": {
+    "burst": 120,
+    "status_counts": {
+      "200": 41,
+      "429": 79
+    },
+    "rejected_at_gateway": 79
+  }
+}

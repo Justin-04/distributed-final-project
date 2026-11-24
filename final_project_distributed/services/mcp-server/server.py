@@ -1,0 +1,299 @@
+"""
+FastMCP Server — Isolated MCP Tool Executor
+
+Exposes domain tools over HTTP on port 8002:
+1. query_dji_manual_vector_db — Parent-child hybrid retrieval + Redis cache + reranking
+2. lookup_dji_error_code_db   — Error code exact-match lookup
+3. ingest_and_index_pdf       — Admin: PDF extraction + S3 + chunking + Qdrant indexing
+
+Also runs a FastAPI HTTP wrapper for REST calls from agent-system-a.
+"""
+
+import os
+import base64
+import logging
+from typing import Annotated, Optional
+
+from dotenv import load_dotenv
+from fastmcp import FastMCP
+from fastapi import FastAPI
+from pydantic import Field
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FastMCP App
+# ─────────────────────────────────────────────────────────────────────────────
+
+mcp = FastMCP(
+    name="DJI MCP Server",
+    instructions=(
+        "You are the tool execution layer for a DJI drone RAG system. "
+        "You provide hybrid vector search over manuals (parent-child with reranking), "
+        "error code lookups, and PDF ingestion capabilities."
+    ),
+)
+
+
+# ── Tool 1: Vector Search (Parent-Child + Reranker + Cache) ──────────────────
+
+@mcp.tool()
+def query_dji_manual_vector_db(
+    query: Annotated[str, Field(description="Natural language search query")],
+    drone_model: Annotated[Optional[str], Field(description="Filter by drone model, e.g. 'DJI Mini 4 Pro'")] = None,
+    top_k: Annotated[int, Field(description="Number of parent chunks to return")] = 4,
+    topic_filter: Annotated[Optional[str], Field(description="Filter by topic, e.g. 'battery'")] = None,
+    modality_filter: Annotated[Optional[str], Field(description="Filter by modality, e.g. 'text', 'image'")] = None,
+) -> list:
+    """
+    Hybrid parent-child retrieval over DJI manual embeddings.
+
+    Pipeline: embed → cache check → dense + BM25 → parent dedup → rerank → top-k.
+    Returns parent chunks (1500 chars) with metadata and image paths.
+    """
+    from tools.retrieval import retrieve as _search
+    return _search(query=query, drone_filter=drone_model, top_k=top_k,
+                   topic_filter=topic_filter, modality_filter=modality_filter,
+                   use_reranker=True, use_cache=True)
+
+
+# ── Tool 2: Error Code Lookup ────────────────────────────────────────────────
+
+@mcp.tool()
+def lookup_dji_error_code_db(
+    error_code: Annotated[str, Field(description="DJI error code, e.g. 'E001' or 'COMPASS_ERR'")],
+) -> dict:
+    """
+    Look up a DJI error code and return resolution steps, severity, and related codes.
+    Performs case-insensitive exact matching against the error code database.
+    """
+    from tools.error_code_tool import lookup_dji_error_code_db as _lookup
+    return _lookup(error_code=error_code)
+
+
+# ── Tool 3: PDF Ingestion (Admin) ────────────────────────────────────────────
+
+@mcp.tool()
+def ingest_and_index_pdf(
+    file_bytes_b64: Annotated[str, Field(description="Base64-encoded PDF file bytes")],
+    filename: Annotated[str, Field(description="Original PDF filename")],
+    drone_model: Annotated[str, Field(description="Target drone model for metadata tagging")],
+) -> dict:
+    """
+    Admin tool: Extract PDF (text + images with GPT-4o captions to S3),
+    then ingest with parent-child chunking strategy into Qdrant.
+    """
+    from tools.documents_tool import upload_and_ingest as _ingest
+
+    pdf_bytes = base64.b64decode(file_bytes_b64)
+    return _ingest(pdf_bytes, filename, drone_model, caption_images=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FastAPI HTTP Wrapper (REST interface for agent-system-a)
+# ─────────────────────────────────────────────────────────────────────────────
+
+http_app = FastAPI(
+    title="DJI MCP Server (HTTP)",
+    description="HTTP wrapper around FastMCP tools for direct REST calls",
+    version="2.0.0",
+)
+
+
+@http_app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "mcp-server",
+        "version": "2.0.0",
+        "tools": [
+            "query_dji_manual_vector_db",
+            "lookup_dji_error_code_db",
+            "ingest_and_index_pdf",
+        ],
+    }
+
+
+@http_app.get("/api/v1/tools")
+async def list_tools():
+    """List available MCP tools."""
+    return {
+        "tools": [
+            {
+                "name": "query_dji_manual_vector_db",
+                "description": "Parent-child hybrid retrieval with reranking and Redis cache",
+            },
+            {
+                "name": "lookup_dji_error_code_db",
+                "description": "DJI error code lookup with resolution steps",
+            },
+            {
+                "name": "ingest_and_index_pdf",
+                "description": "Admin: PDF extraction (GPT-4o captions + S3) + parent-child ingestion to Qdrant",
+            },
+        ]
+    }
+
+
+@http_app.post("/api/v1/call_tool")
+async def call_tool(request: dict):
+    """
+    Execute an MCP tool via HTTP.
+
+    Request: {"tool_name": str, "arguments": dict}
+    Response: {"status": "success", "output": ...} or {"status": "error", "error": str}
+
+    The tools are blocking (embedding call, BM25, cross-encoder reranking, Qdrant).
+    Running them on the event loop would let this server handle only ONE request at
+    a time, serialising every Agent A replica behind it. They run in a worker thread
+    instead, so concurrent requests from several replicas are processed in parallel.
+    """
+    import asyncio
+    return await asyncio.to_thread(_call_tool_sync, request)
+
+
+def _call_tool_sync(request: dict):
+    from tools.retrieval import retrieve as _search
+    from tools.error_code_tool import lookup_dji_error_code_db as _lookup
+    from tools.documents_tool import list_documents as _list_docs, delete_document as _delete_doc, upload_and_ingest as _ingest
+
+    tool_name = request.get("tool_name")
+    arguments = request.get("arguments", {})
+
+    logger.info(f"HTTP call_tool: {tool_name}")
+
+    try:
+        if tool_name == "query_dji_manual_vector_db":
+            # Map drone_model → drone_filter to match retrieve() signature
+            args = dict(arguments)
+            args["drone_filter"] = args.pop("drone_model", None)
+            args.setdefault("use_reranker", True)
+            args.setdefault("use_cache", True)
+            output = _search(**args)
+
+        elif tool_name == "lookup_dji_error_code_db":
+            output = _lookup(**arguments)
+
+        elif tool_name == "ingest_and_index_pdf":
+            if "file_bytes_b64" in arguments:
+                pdf_bytes = base64.b64decode(arguments["file_bytes_b64"])
+                filename = arguments.get("filename", "upload.pdf")
+                drone_model = arguments.get("drone_model", "unknown")
+                caption = arguments.get("caption_images", True)
+                output = _ingest(pdf_bytes, filename, drone_model, caption)
+            else:
+                output = {"error": "file_bytes_b64 is required"}
+
+        elif tool_name == "list_documents":
+            output = _list_docs()
+
+        elif tool_name == "delete_document":
+            source_name = arguments.get("source_name")
+            if not source_name:
+                return {"status": "error", "error": "source_name is required"}
+            # If the document is still being ingested, cancel the job first so the
+            # workers stop writing new chunks for it.
+            try:
+                from ingest.jobs import cancel_jobs_for_source
+                cancel_jobs_for_source(source_name)
+            except Exception as e:
+                logger.warning(f"Could not cancel ingest job for '{source_name}': {e}")
+            output = _delete_doc(source_name)
+
+        else:
+            return {"status": "error", "error": f"Unknown tool: {tool_name}"}
+
+        return {"status": "success", "output": output}
+
+    except Exception as e:
+        logger.error(f"Tool execution error: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Distributed ingestion (event-driven, multi-worker)
+# ─────────────────────────────────────────────────────────────────────────────
+# The MCP server is the PRODUCER: it stores the PDF, creates the job and publishes
+# it to the `ingest:jobs` stream, then returns 202 immediately. The heavy work is
+# done by separate worker processes (worker.py) that can be scaled independently.
+
+from fastapi import HTTPException  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+@http_app.post("/api/v1/ingest/jobs", status_code=202)
+async def submit_ingest_job(request: dict):
+    """Request: {file_bytes_b64, filename, drone_model, caption_images?} → 202 {job}"""
+    from starlette.concurrency import run_in_threadpool
+    from ingest.jobs import create_job, DuplicateJobError
+
+    b64 = request.get("file_bytes_b64")
+    filename = request.get("filename")
+    drone_model = request.get("drone_model")
+    if not all([b64, filename, drone_model]):
+        raise HTTPException(status_code=400, detail="file_bytes_b64, filename and drone_model are required")
+    try:
+        pdf_bytes = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="file_bytes_b64 is not valid base64")
+
+    try:
+        job = await run_in_threadpool(create_job, pdf_bytes, filename, drone_model,
+                                      bool(request.get("caption_images", True)))
+    except DuplicateJobError as e:
+        return JSONResponse(status_code=409, content={"detail": str(e), "job_id": e.job_id})
+    return job
+
+
+@http_app.get("/api/v1/ingest/jobs")
+async def list_ingest_jobs(limit: int = 20):
+    from ingest.jobs import list_jobs
+    return {"jobs": list_jobs(limit)}
+
+
+@http_app.get("/api/v1/ingest/jobs/{job_id}")
+async def get_ingest_job(job_id: str):
+    from ingest.jobs import get_job
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@http_app.get("/api/v1/ingest/workers")
+async def list_ingest_workers():
+    """Live workers (heartbeat < 30 s) — shows how many replicas are processing pages."""
+    from ingest.jobs import live_workers
+    return {"workers": live_workers()}
+
+
+def _on_ingest_event(event: dict):
+    """
+    Every MCP server replica receives `document.indexed` and refreshes its own
+    in-memory BM25 index + the retrieval cache, so all replicas see the new document.
+    """
+    if event.get("type") != "document.indexed":
+        return
+    from tools.retrieval import rebuild_bm25_index, cache_invalidate
+    logger.info(f"Event document.indexed for '{event.get('filename')}' → refreshing BM25 + cache")
+    rebuild_bm25_index()
+    removed = cache_invalidate()
+    logger.info(f"BM25 rebuilt, {removed} cached retrieval results invalidated")
+
+
+@http_app.on_event("startup")
+async def _start_ingest_event_listener():
+    try:
+        from ingest.bus import subscribe_events
+        subscribe_events(_on_ingest_event, name="mcp-server")
+    except Exception as e:
+        logger.warning(f"Ingest event listener not started: {e}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(http_app, host="0.0.0.0", port=8002)

@@ -1,0 +1,2 @@
+{"test": "freeze", "port": 8000, "chats": [11.8, 13.0, 15.2], "probes": 232, "health_max_s": 1.36, "health_median_ms": 15.2, "probes_over_1s": 1, "slow_probes_s": [1.4], "probe_failures": 0, "label": "bug: sync Langfuse flush, Langfuse down", "ts": "2026-11-20 23:02:49"}
+{"test": "freeze", "port": 8000, "chats": [12.1, 0.3, 0.3], "probes": 117, "health_max_s": 0.03, "health_median_ms": 14.1, "probes_over_1s": 0, "slow_probes_s": [], "probe_failures": 0, "label": "fixed: background Langfuse flush + cache/limiter off event loop", "ts": "2026-11-20 23:11:10"}

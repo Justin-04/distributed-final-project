@@ -1,0 +1,18 @@
+{
+  "failover": {
+    "killed_port": 8003,
+    "kill_at_s": 9.3,
+    "requests": 363,
+    "failed": 0,
+    "retried_by_gateway": 2,
+    "before_kill": {
+      "8000": 49,
+      "8003": 45,
+      "8004": 49
+    },
+    "after_kill": {
+      "8000": 111,
+      "8004": 109
+    }
+  }
+}

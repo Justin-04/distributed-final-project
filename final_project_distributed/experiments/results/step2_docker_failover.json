@@ -1,0 +1,27 @@
+{
+  "distribution": {
+    "requests": 60,
+    "ok": 60,
+    "per_replica": {
+      "172.19.0.2": 18,
+      "172.19.0.3": 18,
+      "172.19.0.4": 24
+    }
+  },
+  "failover": {
+    "killed": "agent-a-2",
+    "kill_at_s": 8.5,
+    "requests": 358,
+    "failed": 0,
+    "retried_by_gateway": 1,
+    "before_kill": {
+      "172.19.0.2": 45,
+      "172.19.0.3": 43,
+      "172.19.0.4": 44
+    },
+    "after_kill": {
+      "172.19.0.2": 112,
+      "172.19.0.4": 114
+    }
+  }
+}

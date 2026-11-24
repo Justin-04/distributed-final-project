@@ -1,0 +1,18 @@
+{
+  "setup": "docker compose -f docker-compose.yml -f docker-compose.local.yml (17 containers), Agent A scaled with --scale agent-system-a=N, 40-50 GET /health through the gateway",
+  "bug_static_dns": {
+    "description": "nginx resolved agent-system-a once at start-up",
+    "scale_3_to_4_docker_dns_addresses": 4,
+    "gateway_distribution_before_reload": {"172.23.0.2": 13, "172.23.0.3": 13, "172.23.0.4": 14, "172.23.0.7 (new)": 0},
+    "gateway_distribution_after_manual_reload": {"172.23.0.2": 10, "172.23.0.3": 10, "172.23.0.4": 10, "172.23.0.7": 10}
+  },
+  "fix_resolve": {
+    "description": "resolver 127.0.0.11 valid=10s + server agent-system-a:8000 resolve (nginx 1.27.5)",
+    "scale_4_to_5_no_reload": {"172.23.0.2": 10, "172.23.0.3": 10, "172.23.0.4": 10, "172.23.0.7": 10, "172.23.0.8 (new)": 10},
+    "scale_5_to_3_under_traffic": {"requests": 158, "status_200": 158, "failed": 0, "retried_by_gateway": 2,
+                                   "last_30_requests": {"172.23.0.2": 10, "172.23.0.3": 10, "172.23.0.4": 10}}
+  },
+  "end_to_end": {"register_via_frontend_port_80": 200, "first_chat_s": 49.4, "first_chat_note": "cold start: reranker load + BM25 index build",
+                 "live_ingestion_workers": "1 splitter + 3 page workers", "prometheus_agent_a_targets": 3},
+  "images_built_without_download": true
+}

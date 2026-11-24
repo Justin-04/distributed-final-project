@@ -1,0 +1,263 @@
+version: "3.3"
+
+services:
+  frontend:
+    build:
+      context: ./frontend-v2
+      dockerfile: Dockerfile
+    image: chahinejustin17/dji-frontend:amd64-v1
+    container_name: frontend
+    ports:
+      - "80:3000"
+    depends_on:
+      - gateway
+    networks:
+      - frontend-net
+    restart: unless-stopped
+
+  # API gateway: single entry point, load-balances and fails over across the
+  # Agent A replicas. Only the frontend and the gateway are reachable from outside.
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    image: chahinejustin17/dji-gateway:amd64-v1
+    container_name: gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - gateway-logs:/var/log/gateway     # metrics log read by gateway-log-exporter
+    depends_on:
+      - agent-system-a
+    networks:
+      - frontend-net
+      - monitoring-net
+    restart: unless-stopped
+
+  # ── Monitoring: Prometheus scrapes the gateway exporters and every Agent A replica;
+  #    Grafana shows the provisioned "Gateway & Agent A" dashboard.
+  gateway-log-exporter:
+    image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.11.0
+    command: ["-config-file", "/etc/nginxlog-exporter.yml"]
+    volumes:
+      - gateway-logs:/var/log/gateway:ro
+      - ./services/monitoring/nginxlog-exporter.yml:/etc/nginxlog-exporter.yml:ro
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  gateway-nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    command: ["--nginx.scrape-uri=http://gateway:8081/stub_status"]
+    depends_on:
+      - gateway
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./services/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    ports:
+      - "3000:3000"
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-change-me}
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/gateway-agent-a.json
+    volumes:
+      - ./services/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./services/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  # Stateless orchestrator, scaled horizontally behind the gateway
+  # (no container_name and no published port, so replicas can run side by side).
+  agent-system-a:
+    build:
+      context: .
+      dockerfile: ./services/agent-system-a/Dockerfile
+    image: chahinejustin17/dji-agent-system-a:amd64-v1
+    deploy:
+      replicas: 3
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MCP_SERVER_URL=http://mcp-server:8002
+      - AGENT_B_URL=http://agent-system-b:8001
+      - MONGODB_URI=mongodb://mongodb:27017/dji_rag
+      - REDIS_URL=redis://redis-cache:6379
+      - BERT_MODEL_PATH=/app/models/bert_intent_classifier/model
+      - RATE_LIMIT_REQUESTS=20
+      - RATE_LIMIT_WINDOW=60
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      # Langfuse runs as a standalone container. Reach its host-published
+      # port (5001) via the Docker host gateway instead of localhost.
+      - LANGFUSE_BASE_URL=http://host.docker.internal:5001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mcp-server
+      - agent-system-b
+      - mongodb
+      - redis
+    networks:
+      - frontend-net
+      - backend-net
+      - monitoring-net    # scraped by Prometheus on /metrics
+    restart: unless-stopped
+
+  agent-system-b:
+    build:
+      context: ./services/agent-system-b
+      dockerfile: Dockerfile
+    image: chahinejustin17/dji-agent-system-b:amd64-v1
+    container_name: agent-system-b
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AGENT_B_MODEL=${AGENT_B_MODEL}
+      - SERPAPI_KEY=${SERPAPI_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  mcp-server:
+    build:
+      context: ./services/mcp-server
+      dockerfile: Dockerfile
+    image: chahinejustin17/dji-mcp-server:amd64-v1
+    container_name: mcp-server
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - QDRANT_URL=http://vector-db:6333
+      - REDIS_URL=redis://redis-cache:6379
+    volumes:
+      # uploaded PDFs: written by the MCP server, read by the splitter and the workers.
+      # Containers do not share a filesystem; without this volume the local-disk fallback
+      # (used when S3 is unavailable) fails with "no such file" in the splitter.
+      - ingest-blobs:/app/data/ingest_blobs
+    depends_on:
+      - vector-db
+      - redis
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  # Distributed ingestion workers: same code base as mcp-server, different entry point.
+  # No container_name, so the service can be scaled: docker compose up --scale ingestion-worker=4
+  ingestion-splitter:
+    build:
+      context: ./services/mcp-server
+      dockerfile: Dockerfile
+    image: chahinejustin17/dji-mcp-server:amd64-v1
+    command: ["python", "worker.py", "--role", "splitter"]
+    environment: &worker-env
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - QDRANT_URL=http://vector-db:6333
+      - REDIS_URL=redis://redis-cache:6379
+      - INGEST_CAPTION_RPM=200
+    volumes:
+      - ingest-blobs:/app/data/ingest_blobs
+    depends_on:
+      - vector-db
+      - redis
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  ingestion-worker:
+    image: chahinejustin17/dji-mcp-server:amd64-v1
+    command: ["python", "worker.py", "--role", "page", "--threads", "4", "--image-threads", "8"]
+    environment: *worker-env
+    deploy:
+      replicas: 3
+    volumes:
+      - ingest-blobs:/app/data/ingest_blobs
+    depends_on:
+      - ingestion-splitter
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  vector-db:
+    image: qdrant/qdrant:latest
+    container_name: vector-db
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  redis:
+    image: redis/redis-stack:latest
+    container_name: redis-cache
+    volumes:
+      - redis-storage:/data
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7.0
+    # no container_name: other services reach it by its service name "mongodb", and a
+    # fixed name clashes with any other container called "mongodb" on the same host
+    volumes:
+      - mongo-storage:/data/db
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+networks:
+  frontend-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  qdrant-storage:
+    driver: local
+  redis-storage:
+    driver: local
+  mongo-storage:
+    driver: local
+  gateway-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  ingest-blobs:
+    driver: local

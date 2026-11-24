@@ -1,0 +1,17 @@
+{
+  "overhead_ms": {
+    "direct_p50": 0.9,
+    "direct_p95": 1.5,
+    "gateway_p50": 2.6,
+    "gateway_p95": 4.0,
+    "added_p50": 1.7
+  },
+  "ratelimit": {
+    "burst": 120,
+    "status_counts": {
+      "200": 41,
+      "429": 79
+    },
+    "rejected_at_gateway": 79
+  }
+}

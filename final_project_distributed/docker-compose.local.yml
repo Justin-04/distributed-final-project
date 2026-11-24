@@ -1,0 +1,86 @@
+# Local override — run the whole stack on this machine.
+#
+#   cd frontend-v2 && ./node_modules/.bin/vite build && cd ..       (frontend, once)
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# Differences from the cloud file (docker-compose.yml is unchanged):
+#   * Qdrant: the existing standalone container `qdrant-restored` (indexed manuals, host
+#     port 6333) instead of the empty `vector-db` service. Requires: docker start qdrant-restored
+#   * Images get local names (dji-local/...), so a local build never overwrites the
+#     Docker Hub images used by the cloud deployment.
+#   * The Python images are built ON TOP of the already-built cloud images: only the
+#     current source code is copied in, the dependency layers (PyTorch, LangChain,
+#     sentence-transformers… several GB) are reused instead of being downloaded again.
+#     The full build (`docker compose build` without this file) is unchanged.
+#   * The MCP server reuses the host's Hugging Face cache, so the reranker model
+#     (BAAI/bge-reranker-base, ~1.1 GB) is not downloaded again inside the container.
+#   * Frontend from a prebuilt dist/ (no npm inside Docker: the local network's firewall
+#     intercepts TLS to registry.npmjs.org).
+
+services:
+  frontend:
+    image: dji-local/frontend:latest
+    build:
+      context: ./frontend-v2
+      dockerfile: Dockerfile.prebuilt
+
+  gateway:
+    image: dji-local/gateway:latest
+
+  agent-system-a:
+    image: dji-local/agent-system-a:latest
+    build: !override
+      context: .
+      dockerfile_inline: |
+        FROM chahinejustin17/dji-agent-system-a:amd64-v1
+        RUN rm -rf /app/tests
+        COPY services/agent-system-a/ /app/
+
+  agent-system-b:
+    image: dji-local/agent-system-b:latest
+    build: !override
+      context: ./services/agent-system-b
+      dockerfile_inline: |
+        FROM chahinejustin17/dji-agent-system-b:amd64-v1
+        COPY . /app/
+
+  # not started locally (only with: --profile cloud-qdrant)
+  vector-db:
+    profiles: ["cloud-qdrant"]
+
+  mcp-server:
+    image: dji-local/mcp-server:latest
+    build: !override
+      context: ./services/mcp-server
+      dockerfile_inline: |
+        FROM chahinejustin17/dji-mcp-server:amd64-v1
+        COPY . /app/
+    environment:
+      - QDRANT_URL=http://host.docker.internal:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${USERPROFILE}/.cache/huggingface:/root/.cache/huggingface
+    depends_on: !override
+      - redis
+
+  ingestion-splitter:
+    image: dji-local/mcp-server:latest
+    build: !override
+      context: ./services/mcp-server
+      dockerfile_inline: |
+        FROM chahinejustin17/dji-mcp-server:amd64-v1
+        COPY . /app/
+    environment:
+      - QDRANT_URL=http://host.docker.internal:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: !override
+      - redis
+
+  ingestion-worker:
+    image: dji-local/mcp-server:latest
+    environment:
+      - QDRANT_URL=http://host.docker.internal:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

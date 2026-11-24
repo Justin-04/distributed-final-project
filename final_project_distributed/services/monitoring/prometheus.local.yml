@@ -1,0 +1,33 @@
+# Prometheus — local setup. Agent A replicas are the containers agent-a-1/2/3 on the
+# `dji-net` Docker network (see ../gateway/run_local.sh); Prometheus joins the same
+# network and scrapes each one by name.
+
+global:
+  scrape_interval: 5s        # short interval so a replica crash shows up within seconds
+  evaluation_interval: 5s
+
+scrape_configs:
+  # ① API gateway, from its access log: per-replica traffic, latency, status, retries
+  - job_name: gateway
+    static_configs:
+      - targets: ["dji-gateway-log-exporter:4040"]
+
+  # ① API gateway, from nginx stub_status: open connections, total requests
+  - job_name: gateway-nginx
+    static_configs:
+      - targets: ["dji-gateway-nginx-exporter:9113"]
+
+  # ② Agent A replicas, scraped one by one (the `instance` label identifies the replica)
+  - job_name: agent-a
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["agent-a-1:8000", "agent-a-2:8000", "agent-a-3:8000"]
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: replica
+        replacement: "$1"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
