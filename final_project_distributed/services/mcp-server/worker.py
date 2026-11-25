@@ -57,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger("ingest-worker")
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-IMAGES_DIR = os.path.join(tempfile.gettempdir(), "dji_images")
+IMAGES_DIR = config.IMAGES_DIR  # shared folder, served by the MCP server (see ingest/config.py)
 
 # Release the per-document lock only if it still belongs to this job (compare-and-delete).
 _RELEASE_LOCK_LUA = """
@@ -157,7 +157,7 @@ class Worker:
             page = extraction.extract_single_page(
                 doc, page_index, job["filename"], IMAGES_DIR,
                 caption_images=job.get("caption_images", "1") == "1",
-                upload_to_s3=True,
+                upload_to_s3=config.UPLOAD_IMAGES_TO_S3,
                 claim_xref=lambda xref: claim_image(job_id, xref, page_index + 1),
                 caption_fn=self.rate_limited_caption(job_id),
                 executor=self.image_pool,

@@ -42,3 +42,12 @@ RAW_PDF_S3_PREFIX = "raw/"
 # Fallback when S3 is unavailable (only works when all workers share a disk)
 LOCAL_BLOB_DIR = os.getenv("INGEST_LOCAL_BLOB_DIR", os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ingest_blobs"))
+
+# Images extracted from the manuals (diagrams, page renders). The workers write them and the
+# MCP server serves them (GET /images/<file>), so this folder must be shared by both: a bind
+# mount in docker-compose (./data/images on the host). Answers link to the images through
+# Agent A (/api/v1/images/<file>), so they no longer depend on S3.
+IMAGES_DIR = os.getenv("INGEST_IMAGES_DIR", os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "images"))
+# Also copy each image to S3 (off by default: the bucket credentials are not available)
+UPLOAD_IMAGES_TO_S3 = os.getenv("INGEST_UPLOAD_IMAGES_TO_S3", "false").lower() == "true"

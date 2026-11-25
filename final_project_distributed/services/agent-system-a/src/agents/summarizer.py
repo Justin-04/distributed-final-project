@@ -88,7 +88,7 @@ Provide a grounded response:"""
                 temperature=0.2,
                 max_tokens=800,
             )
-            return response.choices[0].message.content.strip()
+            return self._fix_image_links(response.choices[0].message.content.strip())
 
         except Exception as e:
             logger.error(f"Summarizer error: {e}")
@@ -110,11 +110,10 @@ Provide a grounded response:"""
                 meta = chunk.get("metadata", {})
                 source = f"{meta.get('source', 'Unknown')} (Page {meta.get('page', '?')})"
                 parts.append(f"**[{i}] {source}**\n{chunk['text']}\n")
-                # Image paths — convert local paths to S3 URLs
+                # Image paths — convert stored file paths to URLs served by Agent A
                 if meta.get("image_paths"):
                     for img in meta["image_paths"]:
-                        s3_url = self._to_s3_url(img)
-                        parts.append(f"![Diagram]({s3_url})\n")
+                        parts.append(f"![Diagram]({self._to_image_url(img)})\n")
 
         # Diagnostic context
         if diagnostic_result:
@@ -168,18 +167,35 @@ Provide a grounded response:"""
         )
 
     @staticmethod
-    def _to_s3_url(image_path: str) -> str:
+    def _fix_image_links(text: str) -> str:
         """
-        Convert local image path to S3 URL.
+        Put back the exact image URLs the LLM was given. The model is handed relative links
+        (/api/v1/images/<file>.png) but sometimes rewrites them into invented absolute URLs
+        (e.g. https://api.v1/images/<file>.png), which the browser cannot load. Any markdown
+        image whose link ends in /images/<file>.png is rewritten to the canonical URL.
+        """
+        import re
+        base = os.getenv("IMAGE_BASE_URL", "/api/v1/images").rstrip("/")
+        return re.sub(
+            r"(!\[[^\]]*\]\()\s*[^)\s]*?/images/([A-Za-z0-9._-]+\.png)\s*\)",
+            lambda m: f"{m.group(1)}{base}/{m.group(2)})",
+            text,
+        )
+
+    @staticmethod
+    def _to_image_url(image_path: str) -> str:
+        """
+        Convert a stored image path to the URL the browser loads.
 
         Handles various formats:
-        - 'data/extracted_v2/images/DJI_Air_3_..._page60_img1.png'
+        - '/app/data/images/DJI_Air_3_..._page60_img1.png' (shared images folder)
         - 'C:/Users/.../DJI_Neo_..._page74_img0.png'
-        - Already a full URL
+        - Already a full URL (kept as is)
 
-        Output: 'https://final-project-inmind.s3.eu-north-1.amazonaws.com/images/<filename>'
+        Output: '/api/v1/images/<filename>' — served by Agent A from the MCP server's images
+        folder (IMAGE_BASE_URL overrides the prefix, e.g. to point at a CDN or bucket).
         """
-        S3_BASE = "https://final-project-inmind.s3.eu-north-1.amazonaws.com/images"
+        IMAGE_BASE = os.getenv("IMAGE_BASE_URL", "/api/v1/images").rstrip("/")
 
         # Already a full URL
         if image_path.startswith("http"):
@@ -188,4 +204,4 @@ Provide a grounded response:"""
         # Extract just the filename — handle both / and \ separators
         filename = image_path.replace("\\", "/").split("/")[-1]
 
-        return f"{S3_BASE}/{filename}"
+        return f"{IMAGE_BASE}/{filename}"

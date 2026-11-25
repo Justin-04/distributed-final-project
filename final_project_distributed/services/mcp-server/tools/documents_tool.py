@@ -149,10 +149,13 @@ def delete_document(source_name: str) -> Dict[str, Any]:
         ),
     )
 
-    # 3. Delete images from S3
-    images_deleted = _delete_s3_images(source_name)
+    # 3. Delete the document's images (local folder, and S3 if it was used)
+    from ingest import config as ingest_config
+    images_deleted = _delete_local_images(source_name)
+    if ingest_config.UPLOAD_IMAGES_TO_S3:
+        images_deleted += _delete_s3_images(source_name)
 
-    logger.info(f"Deleted {chunks_removed} chunks + {images_deleted} S3 images for '{source_name}'")
+    logger.info(f"Deleted {chunks_removed} chunks + {images_deleted} images for '{source_name}'")
 
     # Rebuild BM25 index after deletion
     try:
@@ -168,6 +171,21 @@ def delete_document(source_name: str) -> Dict[str, Any]:
         "chunks_removed": chunks_removed,
         "images_deleted": images_deleted,
     }
+
+
+def _delete_local_images(source_name: str) -> int:
+    """Delete the document's images from the shared images folder ({doc_stem}_page*_img*.png)."""
+    from ingest import config as ingest_config
+    doc_stem = source_name.replace(".pdf", "").replace(".PDF", "").replace(" ", "_")
+    removed = 0
+    try:
+        for name in os.listdir(ingest_config.IMAGES_DIR):
+            if name.startswith(f"{doc_stem}_page") and name.endswith(".png"):
+                os.remove(os.path.join(ingest_config.IMAGES_DIR, name))
+                removed += 1
+    except FileNotFoundError:
+        pass
+    return removed
 
 
 def _delete_s3_images(source_name: str) -> int:
@@ -240,8 +258,9 @@ def upload_and_ingest(file_bytes: bytes, filename: str, drone_model: str, captio
 
         logger.info(f"  Step 1: PDF saved to temp ({len(file_bytes)} bytes)")
 
-        # Step 2: Extract pages (text + images → S3)
-        images_dir = os.path.join(tempfile.gettempdir(), "dji_images")
+        # Step 2: Extract pages (text + images → shared images folder)
+        from ingest import config as ingest_config
+        images_dir = ingest_config.IMAGES_DIR
         os.makedirs(images_dir, exist_ok=True)
 
         logger.info(f"  Step 2: Extracting PDF pages (caption={caption_images})...")
@@ -251,7 +270,7 @@ def upload_and_ingest(file_bytes: bytes, filename: str, drone_model: str, captio
             doc_name=filename,
             images_dir=images_dir,
             caption_images=caption_images,
-            upload_to_s3=True,
+            upload_to_s3=ingest_config.UPLOAD_IMAGES_TO_S3,
         )
         timings["extract_caption_s3_seconds"] = round(_time.perf_counter() - t0, 2)
         logger.info(f"  Step 2 done: {len(pages)} pages extracted")

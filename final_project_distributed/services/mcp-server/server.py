@@ -264,6 +264,26 @@ async def get_ingest_job(job_id: str):
     return job
 
 
+@http_app.get("/images/{filename}")
+async def get_image(filename: str):
+    """
+    Serve an image extracted from a manual (written by the ingestion workers into the shared
+    images folder). Agent A proxies it to browsers as /api/v1/images/<filename>.
+    Only plain file names are accepted, so no path outside the folder can be requested.
+    """
+    import re
+    from fastapi.responses import FileResponse
+    from ingest import config as ingest_config
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.png", filename):
+        raise HTTPException(status_code=400, detail="Invalid image name")
+    path = os.path.join(ingest_config.IMAGES_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @http_app.get("/api/v1/ingest/workers")
 async def list_ingest_workers():
     """Live workers (heartbeat < 30 s) — shows how many replicas are processing pages."""

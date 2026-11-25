@@ -832,6 +832,30 @@ async def admin_get_ingest_job(job_id: str, user: dict = Depends(require_admin))
     return resp.json()
 
 
+@app.get("/api/v1/images/{filename}")
+async def get_manual_image(filename: str):
+    """
+    Manual diagrams shown in chat answers. The answer links to this path; the image is
+    fetched from the MCP server, which serves the shared images folder filled by the
+    ingestion workers. Public (an <img> tag sends no token); only plain .png names accepted.
+    """
+    import re
+    from fastapi import Response
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.png", filename):
+        raise HTTPException(status_code=400, detail="Invalid image name")
+    MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8002")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{MCP_SERVER_URL}/images/{filename}")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Image service unavailable")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code if resp.status_code in (400, 404) else 502,
+                            detail="Image not found")
+    return Response(content=resp.content, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/api/v1/admin/documents")
 async def admin_list_documents(user: dict = Depends(require_admin)):
     """Admin: List all ingested documents."""

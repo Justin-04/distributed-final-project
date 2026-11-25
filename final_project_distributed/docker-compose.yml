@@ -162,6 +162,9 @@ services:
       # Containers do not share a filesystem; without this volume the local-disk fallback
       # (used when S3 is unavailable) fails with "no such file" in the splitter.
       - ingest-blobs:/app/data/ingest_blobs
+      # manual images (diagrams): written by the workers, served by the MCP server at
+      # /images/<file> and shown in chat answers through Agent A (/api/v1/images/<file>)
+      - ./data/images:/app/data/images
     depends_on:
       - vector-db
       - redis
@@ -189,6 +192,7 @@ services:
       - INGEST_CAPTION_RPM=200
     volumes:
       - ingest-blobs:/app/data/ingest_blobs
+      - ./data/images:/app/data/images
     depends_on:
       - vector-db
       - redis
@@ -204,6 +208,7 @@ services:
       replicas: 3
     volumes:
       - ingest-blobs:/app/data/ingest_blobs
+      - ./data/images:/app/data/images
     depends_on:
       - ingestion-splitter
     networks:
